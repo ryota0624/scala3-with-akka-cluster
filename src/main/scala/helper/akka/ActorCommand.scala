@@ -21,28 +21,50 @@ object ActorCommand:
 
 case class ActorCommandHandler[C <: Command, Event, E <: Entity[C, Event]]():
   def apply[C2 <: C](actorCommand: ActorCommand[C2], entity: E)(using commandProceessor: CommandProceessor[C2, Event, E]) = {
-    entity.process[C2](actorCommand.cmd)
-      .map(events =>
-        Effect.persist[Event, Option[E]](events)
-          .thenReply(actorCommand.replyTo)
-          (state => {
-            state match {
-              case Some(entity) => StatusReply.success(entity.buildReply(actorCommand.cmd))
-              case None => StatusReply.error(new IllegalStateException("state should not be None"))
-            }
-          })
-      )
+    actorCommand.cmd match {
+      case _: helper.Command.PauseMessage =>
+        Right(Effect.stop[Event, Option[E]]().thenReply(actorCommand.replyTo)(state => {
+          state match {
+            case Some(entity) => StatusReply.success(entity.buildReply(actorCommand.cmd))
+            case None => StatusReply.error(new IllegalStateException("state should not be None"))
+          }
+        }))
+      case _ =>
+        entity.process[C2](actorCommand.cmd)
+          .map(events =>
+            Effect.persist[Event, Option[E]](events)
+//              .thenStop() // TODO: flagでon/off
+              .thenReply(actorCommand.replyTo)
+              (state => {
+                state match {
+                  case Some(entity) => StatusReply.success(entity.buildReply(actorCommand.cmd))
+                  case None => StatusReply.error(new IllegalStateException("state should not be None"))
+                }
+              })
+          )
+    }
   }
   def apply[C2 <: C](actorCommand: ActorCommand[C2])(using commandProceessor: StatelesCommandProceessor[C2, Event, E]) = {
-    commandProceessor.process(actorCommand.cmd)
-      .map(events =>
-        Effect.persist[Event, Option[E]](events)
-          .thenReply(actorCommand.replyTo)
-          (state => {
-            state match {
-              case Some(entity) => StatusReply.success(entity.buildReply(actorCommand.cmd))
-              case None => StatusReply.error(new IllegalStateException("state should not be None"))
-            }
-          })
-      )
+    actorCommand.cmd match {
+      case _: helper.Command.PauseMessage =>
+        val replyTo = actorCommand[helper.Command.PauseMessage with C2].replyTo
+        Right(Effect.stop[Event, Option[E]]().thenReply(replyTo)(state => {
+          StatusReply.success(())
+        }))
+      case _ =>
+        commandProceessor.process(actorCommand.cmd)
+          .map(events =>
+            Effect.persist[Event, Option[E]](events)
+//              .thenStop() // TODO: flagでon/off
+              .thenReply(actorCommand.replyTo)
+              (state => {
+                state match {
+                  case Some(entity) => StatusReply.success(entity.buildReply(actorCommand.cmd))
+                  case None => StatusReply.error(new IllegalStateException("state should not be None"))
+                }
+              })
+          )
+    }
+
+
   }

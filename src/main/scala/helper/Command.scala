@@ -5,6 +5,10 @@ import scala.reflect.ClassTag
 trait Command:
   type Reply
 
+object Command:
+  trait PauseMessage extends Command:
+    override type Reply = Unit
+
 trait ReplyBuilder[C <: Command, -E]:
   def buildReply(entity: E, command: C): command.Reply
 

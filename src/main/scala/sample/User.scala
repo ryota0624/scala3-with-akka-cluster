@@ -10,9 +10,7 @@ import sample.User.{ChangeName, CreateUser, UserActorCommand, UserCommand, UserC
 
 
 case class User(id: User.UserId, name: String) extends helper.Entity[User.UserCommand, User.UserEvent] {
-  override def process[C <: User.UserCommand](c: C)(using processor: helper.CommandProceessor[C, UserEvent, this.type]) : Either[Throwable, Seq[UserEvent]] = processor.process(this, c)
-  override def buildReply[C <: User.UserCommand](c: C)(using processor: helper.ReplyBuilder[C, this.type]): c.Reply = processor.buildReply(this, command = c)
-  def apply(evt: UserEvent): User = {
+    def apply(evt: UserEvent): User = {
     evt match {
       case _: User.UserCreated =>
         throw new IllegalStateException("user already created")
@@ -30,14 +28,17 @@ object User:
     def apply(id: String): UserId = id
     def toString(userId: UserId): String = userId
 
-  sealed trait UserCommand extends helper.Command
+  sealed trait UserCommand extends helper.Command:
+    def id: UserId
   case class CreateUser(id: UserId, name: String) extends UserCommand {
     override type Reply = UserId
   }
 
-  case class ChangeName(name: String) extends UserCommand {
+  case class ChangeName(id: UserId, name: String) extends UserCommand {
     override type Reply = Unit
   }
+
+  case class PauseUser(id: UserId) extends UserCommand with helper.Command.PauseMessage
 
   given createUserProcessor: helper.StatelesCommandProceessor[CreateUser, UserEvent, User] with
     def process(command: CreateUser): Either[Throwable, Seq[UserEvent]] = Right(UserCreated(command.id, command.name) :: Nil)
@@ -47,13 +48,20 @@ object User:
     def process(user: User, command: ChangeName): Either[Throwable, Seq[UserEvent]] = Right(UserNameChanged(user.id, command.name) :: Nil)
     def buildReply(user: User, command: ChangeName): command.Reply = ()
 
+  given pauseProcessor: helper.CommandProceessor[PauseUser, UserEvent, User] with
+    def process(user: User, command: PauseUser): Either[Throwable, Seq[UserEvent]] = Right(Nil)
+    def buildReply(user: User, command: PauseUser): command.Reply = ()
+
   sealed trait UserEvent
   case class UserCreated(id: UserId, name: String) extends UserEvent
   case class UserNameChanged(id: UserId, name: String) extends UserEvent
 
 object UserActor:
-  import sample.User._
+  import sample.User.*
   type State = Option[User]
+  import akka.cluster.sharding.typed.scaladsl.EntityTypeKey
+  val TypeKey: EntityTypeKey[User.UserActorCommand] =
+    EntityTypeKey[User.UserActorCommand]("User")
 
   def actorCommandHanlder = helper.akka.ActorCommandHandler[UserCommand, UserEvent, User]()
 
@@ -63,6 +71,8 @@ object UserActor:
         command.cmd match {
           case _: ChangeName =>
             actorCommandHanlder(command[ChangeName], user)
+          case _: sample.User.PauseUser =>
+            actorCommandHanlder(command[PauseUser], user)
           case _: CreateUser =>
             Left(new IllegalArgumentException("Userは作成済"))
         } fold(t => Effect.reply(command.replyTo)(StatusReply.error(t: Throwable)), identity)
@@ -92,5 +102,5 @@ object UserActor:
     commandHandler = commandHandler(_, _),
     eventHandler = eventHandler,
     emptyState = None,
-    persistenceId = PersistenceId("User", UserId.toString(id))
+    persistenceId = PersistenceId(TypeKey.name, UserId.toString(id))
   ))
